@@ -4,7 +4,7 @@
 #include <sys/time.h>
 #include <math.h>
 
-#define THREADS_PER_BLOCK 517
+#define THREADS_PER_BLOCK 50
 
 
 void validation(int n,int k,int *expected,int *G){
@@ -31,45 +31,55 @@ __global__ void calc_moment(int num_of_moments,int num_of_blocks, int n,int *G,i
   //Find the id of the current thread
   int id=blockIdx.x*blockDim.x+threadIdx.x;
 
+  //Current moment calculated from a thread
+  //int current=id+THREADS_PER_BLOCK*num_of_blocks;
+  // Calculate thread_id based on the coordinates of the block
+  int blockX = blockIdx.x % num_of_blocks;
+  int blockY = blockIdx.x / num_of_blocks;
+  int thread_id = blockX * THREADS_PER_BLOCK + blockY * n * THREADS_PER_BLOCK + threadIdx.x;
+
   int max=THREADS_PER_BLOCK*THREADS_PER_BLOCK*num_of_moments*num_of_blocks;
   int step=THREADS_PER_BLOCK*num_of_blocks;
 
-  for(int moment=id; moment<max && moment<n*n; moment+=step){
-    infl=0;
-    //Find coordinates x,y of each moment
-    //i -> x coordinate
-    //j -> y coordinate
-    int i=moment/step;
-    int j=moment%step;
+  if(thread_id<n*n){
 
-    //for all the neighbors
-    for(int c=0;c<5;c++){
-      for(int d=0;d<5;d++){
+    for(int moment=thread_id; moment<thread_id + n * THREADS_PER_BLOCK && moment<n*n; moment+=n){
+      infl=0;
+      //Find coordinates x,y of each moment
+      //i -> x coordinate
+      //j -> y coordinate
+      int i=moment%n;
+      int j=moment/n;
 
-        //Do not update if the next neighbor coincides with the current point
-        if((c!=2) || (d!=2)){
 
-          //Windows centered on the edge lattice points wrap around to the other side
-          y = ((c-2)+i+n) % n;
-          x = ((d-2)+j+n) % n;
+      //for all the neighbors
+      for(int c=0;c<5;c++){
+        for(int d=0;d<5;d++){
 
-          //Influence of a neighbor is increased
-          //Add to infl the weight*value of the previous neighbor
-          infl += G[y*n+x] * w[c*5+d];
+          //Do not update if the next neighbor coincides with the current point
+          if((c!=2) || (d!=2)){
 
+            //Windows centered on the edge lattice points wrap around to the other side
+            y = ((c-2)+i+n) % n;
+            x = ((d-2)+j+n) % n;
+
+            //Influence of a neighbor is increased
+            //Add to infl the weight*value of the previous neighbor
+            infl += G[y*n+x] * w[c*5+d];
+
+          }
         }
       }
-    }
 
-    //Next value of a moment is defined according to the value of infl
-    if(infl>0.0001){
-      newG[i*n+j]=1;
-    }else if(infl<-0.0001){
-      newG[i*n+j]=-1;
-    }else{
-      newG[i*n+j]=G[i*n+j];
+      //Next value of a moment is defined according to the value of infl
+      if(infl>0.0001){
+        newG[i*n+j]=1;
+      }else if(infl<-0.0001){
+        newG[i*n+j]=-1;
+      }else{
+        newG[i*n+j]=G[i*n+j];
+      }
     }
-
   }
 }
 
@@ -89,8 +99,7 @@ void ising( int *G, double *w, int k, int n){
   }
 
   //if n*n % num_of_blocks * THREADS_PER_BLOCK !=0 take the ceiling value
-  //int num_of_moments = (n*n)/(num_of_blocks *num_of_blocks * THREADS_PER_BLOCK);
-  int num_of_moments = 1 + ((n*n-1)/(num_of_blocks * num_of_blocks * THREADS_PER_BLOCK));
+  int num_of_moments = (n*n)/(num_of_blocks *num_of_blocks * THREADS_PER_BLOCK);
 
   //for every iteration (k)
   for(int t=0;t<k;t++){
