@@ -1,4 +1,4 @@
-# Ising model implemetation in CUDA.
+# Ising model implemetation in CUDA
 ### by Karatza Dimitra & Gonidelis Giannis
 
 
@@ -11,6 +11,6 @@ all versions:
 
     > make all
 
-or select version (e.g. v3):
+or select version (<i>e.g. v3</i>):
 
     > make v3
