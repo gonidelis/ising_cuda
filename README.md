@@ -5,12 +5,12 @@
 
 How to execute:
 
-> $ cd ising_cuda
+    > cd ising_cuda
 
 all versions:
 
-> $ make all
+    > make all
 
 or select version (e.g. v3):
 
-> $ make v3
+    > make v3
