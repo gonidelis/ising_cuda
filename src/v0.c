@@ -1,19 +1,31 @@
+/*
+      Parallel and Distributed Systems
+      \file   v0.c
+      \brief  Serial Implementation for the Ising Model
+
+      \authors Ioannis Gonidelis       Dimitra Karatza
+      \AEMs     8794                    8828
+      \date   2020-01-15
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 
-
+int n=517; // n = dimentions
 
 void validation(int n,int k,int *expected,int *G){
   int flag=0;
 	for(int v = 0; v < n*n; v++){
     if(expected[v] != G[v]){
       flag=-1;
+      break;
     }
   }
   if(flag==0){
-    printf("k=%d: CORRECT ISING MODEL\n",k);
+    printf("\033[0;32m");
+    printf("k=%d: CORRECT ISING MODEL",k);
+    printf("\033[0m \n");
   }else{
     printf("k=%d: WRONG ISING MODEL\n",k);
   }
@@ -81,18 +93,14 @@ void ising( int *G, double *w, int k, int n){
 
 int main(){
 
-	// n = dimentions  k = number of iterations
-	int n = 517;	int k = 1;
-
-  struct timeval start, end;
-  gettimeofday(&start,NULL);
+	int k = 1; // k = number of iterations
 
   // Array of weights
   double weights[] = {0.004, 0.016, 0.026, 0.016, 0.004,
-    0.016, 0.071, 0.117, 0.071, 0.016,
-    0.026, 0.117, 0, 0.117, 0.026,
-    0.016, 0.071, 0.117, 0.071, 0.016,
-    0.004, 0.016, 0.026, 0.016, 0.004};
+                      0.016, 0.071, 0.117, 0.071, 0.016,
+                      0.026, 0.117, 0, 0.117, 0.026,
+                      0.016, 0.071, 0.117, 0.071, 0.016,
+                      0.004, 0.016, 0.026, 0.016, 0.004};
 
 
 	// Get the moments of array G from the binary file
@@ -130,7 +138,7 @@ int main(){
   k=4;
   memcpy(G, copyG, n*n*sizeof(int));
   ising(G, weights, k, n);
-	// Check for k = 4
+  // Check for k = 4
 	fptr = fopen("conf-4.bin","rb");
   if (fptr == NULL){
       printf("Error: Cannnot open file");
@@ -154,9 +162,6 @@ int main(){
 	fread(expected, sizeof(int), n*n, fptr);
 	fclose(fptr);
 	validation(n,k,expected,G);
-
-  gettimeofday(&end,NULL);
-  printf("time : %lf\n", (double)((end.tv_usec - start.tv_usec)/1.0e6 + end.tv_sec - start.tv_sec));
 
   return 0;
 }

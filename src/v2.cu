@@ -1,27 +1,37 @@
+/*
+      Parallel and Distributed Systems
+      \file   v2.c
+      \brief  Implementation for the Ising Model in CUDA
+              One thread computing a block of moments
+
+      \authors Ioannis Gonidelis       Dimitra Karatza
+      \AEMs     8794                    8828
+      \date   2020-01-15
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
-//Each block has 47 threads where each thread calculates 11 moments:
-//517 blocks x 47 threads x 11 moments = 517 x 517
-#define BLOCKS 517
-#define THREADS 47
-#define MOMENTS 11
-//Total cache should be equal to array G
-//Each block's cache is equal to five rows of array G
-#define BLOCK_CACHE 517*5
-#define TOTAL_CACHE 517*517
+
+#define BLOCK_DIMENSION  11
+#define GRID_DIMENSION 47
+#define N 517 //dimention
 
 
 void validation(int n,int k,int *expected,int *G){
   int flag=0;
-	for(int v = 0; v < n*n; v++){
+  for(int v = 0; v < n*n; v++){
     if(expected[v] != G[v]){
       flag=-1;
+      break;
     }
   }
   if(flag==0){
-    printf("k=%d: CORRECT ISING MODEL\n",k);
+    printf("\033[0;32m");
+    printf("k=%d: CORRECT ISING MODEL",k);
+    printf("\033[0m \n");
   }else{
     printf("k=%d: WRONG ISING MODEL\n",k);
   }
@@ -29,82 +39,61 @@ void validation(int n,int k,int *expected,int *G){
 
 
 
-__global__ void calc_moment(int n,int *G,int *newG,double *w){
+__global__ void calc_moment(int *G, int* newG, double* w, int n){
 
-  __shared__ double sharedG[BLOCK_CACHE]; //517*5
+  //NOTE: gridDim.x = gridDim.y it's the same
 
-  int x,y; //indices of a moment
-  double infl; //temporary value to define the influence of the neighbors and the new value of each moment
+  int fit = n/(gridDim.x*BLOCK_DIMENSION);   //number of complete blocks that fit into G
 
-  //Find the global id of the current thread
-  int id=blockIdx.x*blockDim.x+threadIdx.x;
+  //Global G indices
+  int ix=threadIdx.x+blockIdx.x*blockDim.x;
+  int iy=threadIdx.y+blockIdx.y*blockDim.y;
 
-  //Find indices of the moments of G to be copied
-  int shared_x,shared_y,shared_i,shared_j;
+  int x,y;//shared memory indices
 
-  //Copy array G to the new array sharedG (which belongs to the shared memeory)
-  for(int t=threadIdx.x; t < 517; t+=MOMENTS){
+  int thread_step_x= blockDim.x*gridDim.x;
 
-    for(int line=-2; line < 3; line++)
-    {
-      shared_x=(blockIdx.x+n+line)%n;
-      shared_y=(blockIdx.x * blockDim.x + t)%n;
+  double infl; //influence of neighbors on current moment
 
-    //  shared_i=(shared_y+n-2)%n;
-    //  shared_j=(shared_x+n-2)%n;
-      if(blockIdx.x==0 && shared_y<5)
-    //  printf("%d, %d\n", shared_x, shared_y);
-      sharedG[t]=G[shared_x*n+shared_y];
-
-    }
-
-  }
-
-
-  //Make sure number of threads is within the acceptable limits
-  if(id<BLOCKS*THREADS){
-
-    //Find coordinates x,y of each moment
-    //i -> x coordinate
-    //j -> y coordinate
-    int i,j;
-    i=blockIdx.x;
-
-    for(j=threadIdx.x*MOMENTS; j<threadIdx.x*MOMENTS+MOMENTS; j++){
-
-      infl=0;
-
+  for(int i=0; i<(fit+1)*(fit+1); i++){
+    infl=0;
+    if(ix<N && iy<N){
       //for all the neighbors
       for(int c=0;c<5;c++){
         for(int d=0;d<5;d++){
-
           //Do not update if the next neighbor coincides with the current point
           if((c!=2) || (d!=2)){
 
             //Windows centered on the edge lattice points wrap around to the other side
-            y = (i+n+c-2) % n;
-            x = (j+n+d-2) % n;
+            y = ((c-2)+iy+n) % n;
+            x = ((d-2)+ix+n) % n;
 
             //Influence of a neighbor is increased
             //Add to infl the weight*value of the previous neighbor
-            infl += sharedG[y*n+x] * w[c*5+d];
+            infl += G[y*n+x] * w[c*5+d];
 
           }
         }
       }
-
       //Next value of a moment is defined according to the value of infl
       if(infl>0.0001){
-        newG[i*n+j]=1;
+        newG[iy*n+ix]=1;
       }else if(infl<-0.0001){
-        newG[i*n+j]=-1;
+        newG[iy*n+ix]=-1;
       }else{
-        newG[i*n+j]=G[i*n+j];
+        newG[iy*n+ix]=G[iy*n+ix];
       }
     }
+
+    //update G coordinates - traverse horizontally though G map
+    if((ix+thread_step_x)/n>=1){
+      iy=blockDim.y*gridDim.y+iy;
+    }else{
+      iy=iy;
+    }
+    ix=(ix+thread_step_x)%n;
   }
 }
-
 
 
 void ising( int *G, double *w, int k, int n){
@@ -112,21 +101,26 @@ void ising( int *G, double *w, int k, int n){
   int *newG,*swapG;
   cudaMallocManaged(&newG,n*n*sizeof(int)); //save previous G before changing it
 
+  dim3 block(BLOCK_DIMENSION, BLOCK_DIMENSION);
+  int grid_dimension = GRID_DIMENSION; //define it gloabaly or find a way to produce it
+  dim3 grid(grid_dimension, grid_dimension);
+
   //for every iteration (k)
   for(int t=0;t<k;t++){
 
-    //For every moment of G (n*n) call a thread
-    //optimal pair: 517 threads x 517 blocks
-    calc_moment<<<BLOCKS,THREADS>>>(n,G,newG,w);
+    //Call kernel function
+    calc_moment<<<grid,block>>>(G, newG, w,n);
 
     // Synchronize threads before swapping the arrays
-		cudaDeviceSynchronize();
+    cudaError_t cudaerr = cudaDeviceSynchronize();
+    if (cudaerr != cudaSuccess)
+        printf("kernel launch failed with error \"%s\".\n",
+               cudaGetErrorString(cudaerr));
 
     //Swap arrays G and newG
     swapG=newG;
     newG=G;
     G=swapG;
-
   }
 
   //If last k is an odd number, then the returned G should be newG
@@ -134,16 +128,14 @@ void ising( int *G, double *w, int k, int n){
     memcpy(newG, G, n*n*sizeof(int));
   }
 
-  //cudaFree(newG);
 }
 
 
-
-int main(){
-
-	// n = dimentions  k = number of iterations
-	int n = 517;	int k = 1;
-
+int main(void)
+{
+  //k = number of iterations
+  int k = 1;
+  int n=N;
 
   // Array of weights
   double *weights;
@@ -156,7 +148,7 @@ int main(){
   memcpy(weights,w,sizeof(w));
 
 
-	// Get the moments of array G from the binary file
+  // Get the moments of array G from the binary file
   FILE *fptr = fopen("conf-init.bin","rb");
   if (fptr == NULL){
       printf("Error: Cannnot open file");
@@ -177,51 +169,47 @@ int main(){
 
   //Call ising for k=1
   ising(G, weights, k, n);
-	// Check results by comparing with ready data for k=1
-	int *expected;
+   // Check results by comparing with ready data for k=1
+  int *expected;
   cudaMallocManaged(&expected,n*n*sizeof(int));
-	fptr = fopen("conf-1.bin","rb");
+  fptr = fopen("conf-1.bin","rb");
   if (fptr == NULL){
       printf("Error: Cannnot open file");
       exit(1);
   }
-	fread(expected, sizeof(int), n*n, fptr);
-	fclose(fptr);
+  fread(expected, sizeof(int), n*n, fptr);
+  fclose(fptr);
   validation(n,k,expected,G);
-
 
   //Call ising for k=4
   k=4;
   memcpy(G, copyG, n*n*sizeof(int));
   ising(G, weights, k, n);
-	// Check for k = 4
-	fptr = fopen("conf-4.bin","rb");
+  // Check for k = 4
+  fptr = fopen("conf-4.bin","rb");
   if (fptr == NULL){
       printf("Error: Cannnot open file");
       exit(1);
   }
-	fread(expected, sizeof(int), n*n, fptr);
-	fclose(fptr);
-	validation(n,k,expected,G);
+  fread(expected, sizeof(int), n*n, fptr);
+  fclose(fptr);
+  validation(n,k,expected,G);
 
 
   //Call ising for k=11;
   k=11;
   memcpy(G, copyG, n*n*sizeof(int));
   ising(G, weights, k, n);
-	// Check for k = 11
-	fptr = fopen("conf-11.bin","rb");
+  // Check for k = 11
+  fptr = fopen("conf-11.bin","rb");
   if (fptr == NULL){
       printf("Error: Cannnot open file");
       exit(1);
   }
-	fread(expected, sizeof(int), n*n, fptr);
-	fclose(fptr);
-	validation(n,k,expected,G);
-
-  //cudaFree(G);
-  //cudaFree(copyG);
-  //cudaFree(expected);
+  fread(expected, sizeof(int), n*n, fptr);
+  fclose(fptr);
+  validation(n,k,expected,G);
 
   return 0;
+
 }

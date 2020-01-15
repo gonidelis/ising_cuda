@@ -1,102 +1,79 @@
+/*
+      Parallel and Distributed Systems
+      \file   v1.c
+      \brief  Implementation for the Ising Model in CUDA
+              One thread per moment
+
+      \authors Ioannis Gonidelis       Dimitra Karatza
+      \AEMs     8794                    8828
+      \date   2020-01-15
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-//Each block has 47 threads where each thread calculates 11 moments:
-//517 blocks x 47 threads x 11 moments = 517 x 517
-#define BLOCKS 517
-#define THREADS 47
-#define MOMENTS 11
-//Total cache should be equal to array G
-//Each block's cache is equal to a row of array G
-#define BLOCK_CACHE 517*5
-#define TOTAL_CACHE 517*517*5
-
+int n=517; // n = dimentions
 
 void validation(int n,int k,int *expected,int *G){
   int flag=0;
 	for(int v = 0; v < n*n; v++){
     if(expected[v] != G[v]){
       flag=-1;
+      break;
     }
   }
   if(flag==0){
-    printf("k=%d: CORRECT ISING MODEL\n",k);
+    printf("\033[0;32m");
+    printf("k=%d: CORRECT ISING MODEL",k);
+    printf("\033[0m \n");
   }else{
     printf("k=%d: WRONG ISING MODEL\n",k);
   }
 }
 
 
-__shared__ double sharedG[BLOCK_CACHE];
-
 __global__ void calc_moment(int n,int *G,int *newG,double *w){
 
   int x,y; //indices of a moment
-  double infl; //temporary value to define the influence of the neighbors and the new value of each moment
+  double infl=0; //temporary value to define the influence of the neighbors and the new value of each moment
 
-  //Find the global id of the current thread
+  //Find the id of the current thread
   int id=blockIdx.x*blockDim.x+threadIdx.x;
 
-  //Find indices of the moments of G to be copied
-  int shared_x,shared_y,shared_i,shared_j;
-
-  //Copy array G to the new array sharedG (which belongs to the shared memeory)
-  for(int t=threadIdx.x; t<BLOCK_CACHE; t+=MOMENTS){
-
-    //shared_x=blockIdx.x;
-    //shared_y=blockIdx.x*blockDim.x + t;
-    shared_x=t%n;
-    shared_y=t/n;
-
-    shared_i=(shared_y+n-2)%n;
-    shared_j=(shared_x+n-2)%n;
-
-    sharedG[t]=G[shared_i*n+shared_j];
-
-  }
-
-
-  //Make sure number of threads is within the acceptable limits
-  if(id<BLOCKS*THREADS){
+  if(id<n*n){
 
     //Find coordinates x,y of each moment
-    //i -> x coordinate
-    //j -> y coordinate
     int i,j;
-    i=blockIdx.x;
+    i=id/n; //x coordinate
+    j=id%n; //y coordinate
 
-    for(j=threadIdx.x*MOMENTS; j<threadIdx.x*MOMENTS+MOMENTS; j++){
+    //for all the neighbors
+    for(int c=0;c<5;c++){
+      for(int d=0;d<5;d++){
 
-      infl=0;
+        //Do not update if the next neighbor coincides with the current point
+        if((c!=2) || (d!=2)){
 
-      //for all the neighbors
-      for(int c=0;c<5;c++){
-        for(int d=0;d<5;d++){
+          //Windows centered on the edge lattice points wrap around to the other side
+          y = ((c-2)+i+n) % n;
+          x = ((d-2)+j+n) % n;
 
-          //Do not update if the next neighbor coincides with the current point
-          if((c!=2) || (d!=2)){
+          //Influence of a neighbor is increased
+          //Add to infl the weight*value of the previous neighbor
+          infl += G[y*n+x] * w[c*5+d];
 
-            //Windows centered on the edge lattice points wrap around to the other side
-            y = (i+n+c-2) % n;
-            x = (j+n+d-2) % n;
-
-            //Influence of a neighbor is increased
-            //Add to infl the weight*value of the previous neighbor
-            infl += sharedG[y*n+x] * w[c*5+d];
-
-          }
         }
       }
+    }
 
-      //Next value of a moment is defined according to the value of infl
-      if(infl>0.0001){
-        newG[i*n+j]=1;
-      }else if(infl<-0.0001){
-        newG[i*n+j]=-1;
-      }else{
-        newG[i*n+j]=G[i*n+j];
-      }
+    //Next value of a moment is defined according to the value of infl
+    if(infl>0.0001){
+      newG[i*n+j]=1;
+    }else if(infl<-0.0001){
+      newG[i*n+j]=-1;
+    }else{
+      newG[i*n+j]=G[i*n+j];
     }
   }
 }
@@ -113,7 +90,7 @@ void ising( int *G, double *w, int k, int n){
 
     //For every moment of G (n*n) call a thread
     //optimal pair: 517 threads x 517 blocks
-    calc_moment<<<BLOCKS,THREADS>>>(n,G,newG,w);
+    calc_moment<<<n,n>>>(n,G,newG,w);
 
     // Synchronize threads before swapping the arrays
 		cudaDeviceSynchronize();
@@ -130,16 +107,12 @@ void ising( int *G, double *w, int k, int n){
     memcpy(newG, G, n*n*sizeof(int));
   }
 
-  //cudaFree(newG);
 }
-
-
 
 int main(){
 
-	// n = dimentions  k = number of iterations
-	int n = 517;	int k = 1;
-
+	//k = number of iterations
+	int k = 1;
 
   // Array of weights
   double *weights;
@@ -186,6 +159,7 @@ int main(){
   validation(n,k,expected,G);
 
 
+
   //Call ising for k=4
   k=4;
   memcpy(G, copyG, n*n*sizeof(int));
@@ -201,6 +175,7 @@ int main(){
 	validation(n,k,expected,G);
 
 
+
   //Call ising for k=11;
   k=11;
   memcpy(G, copyG, n*n*sizeof(int));
@@ -214,10 +189,6 @@ int main(){
 	fread(expected, sizeof(int), n*n, fptr);
 	fclose(fptr);
 	validation(n,k,expected,G);
-
-  //cudaFree(G);
-  //cudaFree(copyG);
-  //cudaFree(expected);
 
   return 0;
 }
